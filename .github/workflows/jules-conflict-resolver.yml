@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: 2026 shadPS4 Emulator Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: Jules Conflict Resolver
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to resolve"
+        required: true
+        type: string
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: jules-resolve-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    if: |
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'pull_request_target' && github.event.label.name == 'auto-resolve')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve PR number
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = context.payload.inputs?.pr_number || context.payload.pull_request?.number;
+            if (!prNumber) {
+              core.setFailed('PR number not provided.');
+              return;
+            }
+            core.setOutput('number', prNumber);
+
+      - name: Fetch PR metadata
+        id: prmeta
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          EVENT_NAME: ${{ github.event_name }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            if (pr.state !== 'open') {
+              core.setFailed(`PR #${prNumber} is not open.`);
+              return;
+            }
+            if (pr.head.repo.full_name !== pr.base.repo.full_name) {
+              core.setFailed(`PR #${prNumber} is from a fork; refusing to use secrets.`);
+              return;
+            }
+            if (process.env.EVENT_NAME === 'pull_request_target' && !pr.head.ref.startsWith('sync/')) {
+              core.setFailed(`PR #${prNumber} head branch ${pr.head.ref} is not a sync/* branch.`);
+              return;
+            }
+            if (pr.base.ref !== 'main') {
+              core.setFailed(`PR #${prNumber} base is ${pr.base.ref}; expected main.`);
+              return;
+            }
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('base_ref', pr.base.ref);
+            core.setOutput('head_sha', pr.head.sha);
+
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.prmeta.outputs.head_sha }}
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Resolve conflicts with Jules
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          JULES_SOURCE: ${{ secrets.JULES_SOURCE }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_REF: ${{ steps.prmeta.outputs.head_ref }}
+          BASE_REF: ${{ steps.prmeta.outputs.base_ref }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          AUTO_MERGE: "true"
+        run: |
+          chmod +x .github/scripts/jules-resolve-conflicts.sh
+          .github/scripts/jules-resolve-conflicts.sh
