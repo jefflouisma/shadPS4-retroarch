@@ -1,0 +1,29 @@
+{
+  "name": "retroarch-smoke-menu",
+  "continue_on_failure": false,
+  "steps": [
+    {
+      "type": "launch",
+      "menu": true,
+      "verbose": true,
+      "startup_wait_seconds": 20.0
+    },
+    {
+      "type": "wait",
+      "seconds": 5.0
+    },
+    {
+      "type": "command",
+      "command": "GET_STATUS"
+    },
+    {
+      "type": "screenshot_assert",
+      "prompt": "Confirm the RetroArch main menu is visible with menu items or icons.",
+      "capture_mode": "system",
+      "timeout_seconds": 5.0
+    },
+    {
+      "type": "exit"
+    }
+  ]
+}
